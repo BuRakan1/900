@@ -1297,10 +1297,6 @@ class ModernAttendanceSystem:
             return
         self.insert_attendance_record("غائب بعذر", excuse_reason=reason)
 
-   
-   
-   
-  
     def register_all_unmarked_as_present(self):
         if not self.current_user["permissions"]["can_edit_attendance"]:
             messagebox.showwarning("تنبيه", "ليس لديك صلاحية تسجيل الحضور والغياب")
@@ -1402,7 +1398,8 @@ class ModernAttendanceSystem:
             messagebox.showwarning("تنبيه", "ليس لديك صلاحية تسجيل الحضور والغياب")
             return
 
-        if not messagebox.askyesnocancel("تأكيد", "هل تريد تسجيل تأخير جماعي لجميع المتدربين الذين لم يتم تسجيلهم اليوم؟"):
+        if not messagebox.askyesnocancel("تأكيد",
+                                         "هل تريد تسجيل تأخير جماعي لجميع المتدربين الذين لم يتم تسجيلهم اليوم؟"):
             return
 
         current_date = self.date_entry.get_date().strftime("%Y-%m-%d")
@@ -1752,7 +1749,7 @@ class ModernAttendanceSystem:
 
                         # تحديث شريط التقدم للمتدربين
                         progress = 50 + (course_idx / len(selected_courses) * 50) + (
-                                    i / len(students) * course_progress_increment)
+                                i / len(students) * course_progress_increment)
                         if i % 10 == 0:
                             progress_var.set(progress)
                             status_label.config(text=f"تسجيل المتدربين في دورة {course_name} ({i + 1}/{len(students)})")
@@ -2456,8 +2453,8 @@ class ModernAttendanceSystem:
                 messagebox.showinfo("تنبيه", "لا توجد دورات نشطة لتصدير التكميل الرسمي")
                 return
 
-            # حساب الإحصائيات لكل فئة
-            categories = ["ضباط", "أفراد", "مشتركة", "مدنيين", "طلبة"]
+            # حساب الإحصائيات لكل فئة (حذف فئة "طلبة")
+            categories = ["ضباط", "أفراد", "مشتركة", "مدنيين"]
             stats = {cat: {
                 'courses': set(),
                 'students': 0,
@@ -2487,8 +2484,9 @@ class ModernAttendanceSystem:
                     SELECT 
                         SUM(CASE WHEN a.status = 'غائب' THEN 1 ELSE 0 END) as absent,
                         SUM(CASE WHEN a.status = 'متأخر' THEN 1 ELSE 0 END) as late,
-                        SUM(CASE WHEN a.status IN ('غائب بعذر', 'حالة وفاة', 'منوم') THEN 1 ELSE 0 END) as sick,
-                        SUM(CASE WHEN a.status = 'لم يباشر' THEN 1 ELSE 0 END) as not_started
+                        SUM(CASE WHEN a.status = 'منوم' THEN 1 ELSE 0 END) as sick,
+                        SUM(CASE WHEN a.status = 'لم يباشر' THEN 1 ELSE 0 END) as not_started,
+                        SUM(CASE WHEN a.status = 'حالة وفاة' THEN 1 ELSE 0 END) as death_case
                     FROM attendance a
                     JOIN trainees t ON a.national_id = t.national_id
                     WHERE t.course = ? 
@@ -2498,9 +2496,10 @@ class ModernAttendanceSystem:
 
                 result = cursor.fetchone()
                 if result:
-                    stats[course_category]['absent'] += result[0] or 0
+                    # حالة الوفاة تُحسب مع الغياب
+                    stats[course_category]['absent'] += (result[0] or 0) + (result[4] or 0)
                     stats[course_category]['late'] += result[1] or 0
-                    stats[course_category]['sick_leave'] += result[2] or 0
+                    stats[course_category]['sick_leave'] += result[2] or 0  # منوم فقط
                     stats[course_category]['not_started'] += result[3] or 0
 
             # إنشاء DataFrame للإحصائيات
@@ -2524,9 +2523,10 @@ class ModernAttendanceSystem:
                     elif label == "لم يباشر":
                         row[category] = cat_stats['not_started']
                     elif label == "المجموع":
-                        # حساب إجمالي الحاضرين (الملتحقين - الغائبين بكل أنواعهم)
-                        total_present = cat_stats['students'] - (cat_stats['absent'] + cat_stats['not_started'])
-                        row[category] = total_present
+                        # حساب المجموع = عدد الملتحقين - (الغياب + التأخير + الإجازة المرضية + لم يباشر)
+                        total = cat_stats['students'] - (cat_stats['absent'] + cat_stats['late'] +
+                                                         cat_stats['sick_leave'] + cat_stats['not_started'])
+                        row[category] = total
                 stats_data.append(row)
 
             df_stats = pd.DataFrame(stats_data)
@@ -2541,7 +2541,7 @@ class ModernAttendanceSystem:
                 FROM attendance a
                 JOIN trainees t ON a.national_id = t.national_id
                 LEFT JOIN course_info ci ON t.course = ci.course_name
-                WHERE a.status IN ('غائب', 'متأخر', 'غائب بعذر', 'حالة وفاة', 'منوم')
+                WHERE a.status IN ('غائب', 'متأخر', 'منوم', 'حالة وفاة')
                 AND (t.is_excluded = 0 OR (t.is_excluded = 1 AND t.excluded_date > ?))
                 AND a.date = ?
                 ORDER BY a.status, t.name
@@ -2553,8 +2553,10 @@ class ModernAttendanceSystem:
                     note = f"غياب {category}"
                 elif status == "متأخر":
                     note = f"تأخير {category}"
-                else:
+                elif status == "منوم":
                     note = f"إجازة مرضية {category}"
+                elif status == "حالة وفاة":
+                    note = f"غياب {category} - حالة وفاة"
 
                 details_data.append({
                     "العدد": row_num,
@@ -2622,8 +2624,8 @@ class ModernAttendanceSystem:
                 stats_sheet = workbook['الإحصائيات']
                 stats_sheet.sheet_view.rightToLeft = True
 
-                # إضافة العنوان الرئيسي
-                stats_sheet.merge_cells('A1:G1')
+                # إضافة العنوان الرئيسي - تأكد من دمج الخلايا الصحيحة فقط
+                stats_sheet.merge_cells('A1:E1')  # من A إلى E فقط (5 أعمدة: م + 4 فئات)
                 stats_sheet[
                     'A1'] = f"التكميل اليومي لدورات التخصصية المنعقدة بمدنية تدريب الأمن العام بالمنطقة الشرقية ليوم {day_arabic} الموافق {date_formatted}"
                 stats_sheet['A1'].font = openpyxl.styles.Font(bold=True, size=14)
@@ -2632,8 +2634,8 @@ class ModernAttendanceSystem:
                 stats_sheet['A1'].fill = openpyxl.styles.PatternFill(start_color="E0E0E0", end_color="E0E0E0",
                                                                      fill_type="solid")
 
-                # تنسيق الرؤوس
-                for row in stats_sheet['A3:G3']:
+                # تنسيق الرؤوس - فقط 5 أعمدة
+                for row in stats_sheet['A3:E3']:
                     for cell in row:
                         cell.font = openpyxl.styles.Font(bold=True, size=12)
                         cell.fill = openpyxl.styles.PatternFill(start_color="4CAF50", end_color="4CAF50",
@@ -2647,8 +2649,8 @@ class ModernAttendanceSystem:
                             bottom=openpyxl.styles.Side(style='thin')
                         )
 
-                # تنسيق البيانات
-                for row in stats_sheet.iter_rows(min_row=4, max_row=stats_sheet.max_row, min_col=1, max_col=7):
+                # تنسيق البيانات - فقط 5 أعمدة
+                for row in stats_sheet.iter_rows(min_row=4, max_row=stats_sheet.max_row, min_col=1, max_col=5):
                     for cell in row:
                         cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
                         cell.border = openpyxl.styles.Border(
@@ -2663,8 +2665,8 @@ class ModernAttendanceSystem:
                             cell.fill = openpyxl.styles.PatternFill(start_color="E0E0E0", end_color="E0E0E0",
                                                                     fill_type="solid")
 
-                # ضبط عرض الأعمدة بطريقة صحيحة
-                column_widths = {'A': 15, 'B': 15, 'C': 15, 'D': 15, 'E': 15, 'F': 15, 'G': 15}
+                # ضبط عرض الأعمدة بطريقة صحيحة - 5 أعمدة فقط
+                column_widths = {'A': 20, 'B': 15, 'C': 15, 'D': 15, 'E': 15}
                 for col_letter, width in column_widths.items():
                     stats_sheet.column_dimensions[col_letter].width = width
 
@@ -3024,7 +3026,6 @@ class ModernAttendanceSystem:
         else:
             self.export_filtered_records(status_value)
 
-   
     def change_page(self, delta, total_pages):
         """تغيير الصفحة الحالية والتحديث"""
         new_page = self.current_page + delta
@@ -3303,7 +3304,6 @@ class ModernAttendanceSystem:
                                bg="#FF5722",  # لون برتقالي مميز
                                fg="white", padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=delete_record)
         delete_btn.pack(side=tk.RIGHT, padx=5)
-
 
     def add_new_student(self):
         if not self.current_user["permissions"]["can_add_students"]:
@@ -3941,7 +3941,7 @@ class ModernAttendanceSystem:
             bg=self.colors["light"]
         ).pack(side=tk.RIGHT, padx=5)
 
-        course_categories = ["ضباط", "أفراد", "مشتركة", "مدنيين", "طلبة"]
+        course_categories = ["ضباط", "أفراد", "مشتركة", "مدنيين"]
         category_var = tk.StringVar(value="مشتركة")
         category_combo = ttk.Combobox(
             category_frame,
@@ -4484,29 +4484,127 @@ class ModernAttendanceSystem:
             return False
 
     def edit_course_dates(self, course_name):
-        """تعديل تواريخ بداية ونهاية الدورة"""
+        """تعديل اسم الدورة وتواريخ بداية ونهاية الدورة وفئتها"""
 
-        # استرجاع التواريخ الحالية من قاعدة البيانات
+        # استرجاع البيانات الحالية من قاعدة البيانات
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT start_day, start_month, start_year, end_day, end_month, end_year
+            SELECT start_day, start_month, start_year, end_day, end_month, end_year, 
+                   end_date_system, course_category
             FROM course_info
             WHERE course_name=?
         """, (course_name,))
 
-        current_dates = cursor.fetchone() or ["", "", "", "", "", ""]
+        current_info = cursor.fetchone()
+        current_dates = current_info[:6] if current_info else ["", "", "", "", "", ""]
+        current_end_date_system = current_info[6] if current_info and len(current_info) > 6 else None
+        current_category = current_info[7] if current_info and len(current_info) > 7 else "مشتركة"
 
-        # إنشاء نافذة تعديل التواريخ
+        # إنشاء نافذة تعديل البيانات
         edit_window = tk.Toplevel(self.root)
-        edit_window.title(f"تعديل تواريخ دورة: {course_name}")
-        edit_window.geometry("500x400")
+        edit_window.title(f"تعديل بيانات دورة: {course_name}")
+        edit_window.geometry("600x750")  # زيادة الارتفاع لاستيعاب حقل الفئة
         edit_window.configure(bg=self.colors["light"])
         edit_window.transient(self.root)
         edit_window.grab_set()
 
+        # توسيط النافذة
+        x = (edit_window.winfo_screenwidth() - 600) // 2
+        y = (edit_window.winfo_screenheight() - 750) // 2
+        edit_window.geometry(f"600x750+{x}+{y}")
+
+        # عنوان النافذة
+        tk.Label(
+            edit_window,
+            text="تعديل بيانات الدورة",
+            font=self.fonts["title"],
+            bg=self.colors["primary"],
+            fg="white",
+            padx=10, pady=10
+        ).pack(fill=tk.X)
+
+        # إطار المحتويات
+        content_frame = tk.Frame(edit_window, bg=self.colors["light"], padx=20, pady=20)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # حقل اسم الدورة
+        name_frame = tk.LabelFrame(
+            content_frame,
+            text="اسم الدورة",
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            padx=10, pady=10
+        )
+        name_frame.pack(fill=tk.X, pady=10)
+
+        new_course_name_var = tk.StringVar(value=course_name)
+        course_name_entry = tk.Entry(
+            name_frame,
+            textvariable=new_course_name_var,
+            font=self.fonts["text"],
+            width=40
+        )
+        course_name_entry.pack(pady=5)
+
+        # إطار فئة الدورة
+        category_frame = tk.LabelFrame(
+            content_frame,
+            text="فئة الدورة",
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            padx=10, pady=10
+        )
+        category_frame.pack(fill=tk.X, pady=10)
+
+        category_var = tk.StringVar(value=current_category)
+        category_combo = ttk.Combobox(
+            category_frame,
+            textvariable=category_var,
+            values=["ضباط", "أفراد", "مشتركة", "مدنيين"],
+            state="readonly",
+            width=20,
+            font=self.fonts["text"]
+        )
+        category_combo.pack(pady=5)
+
+        # إطار لتاريخ نهاية الدورة في النظام
+        system_end_date_frame = tk.LabelFrame(
+            content_frame,
+            text="تاريخ نهاية الدورة في النظام",
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            padx=10, pady=10
+        )
+        system_end_date_frame.pack(fill=tk.X, pady=10)
+
+        system_end_date_entry = DateEntry(
+            system_end_date_frame,
+            width=15,
+            background=self.colors["primary"],
+            foreground='white',
+            borderwidth=2,
+            date_pattern='yyyy-mm-dd',
+            font=self.fonts["text"],
+            firstweekday="sunday"
+        )
+        system_end_date_entry.pack(pady=5)
+
+        # تعيين التاريخ الحالي إذا كان موجوداً
+        if current_end_date_system:
+            try:
+                date_obj = datetime.datetime.strptime(current_end_date_system, "%Y-%m-%d")
+                system_end_date_entry.set_date(date_obj)
+            except:
+                pass
+
         # إضافة إطار لتاريخ بداية الدورة
-        start_date_frame = tk.LabelFrame(edit_window, text="تاريخ بداية الدورة", font=self.fonts["text_bold"],
-                                         bg=self.colors["light"], padx=10, pady=10)
+        start_date_frame = tk.LabelFrame(
+            content_frame,
+            text="تاريخ بداية الدورة (للعرض)",
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            padx=10, pady=10
+        )
         start_date_frame.pack(fill=tk.X, pady=10)
 
         # حقول تاريخ البداية
@@ -4534,9 +4632,14 @@ class ModernAttendanceSystem:
         start_year_entry.insert(0, current_dates[2] if current_dates[2] else "")
         start_year_entry.pack(side=tk.RIGHT, padx=5)
 
-        # نفس الشيء لتاريخ النهاية...
-        end_date_frame = tk.LabelFrame(edit_window, text="تاريخ نهاية الدورة", font=self.fonts["text_bold"],
-                                       bg=self.colors["light"], padx=10, pady=10)
+        # إطار لتاريخ نهاية الدورة
+        end_date_frame = tk.LabelFrame(
+            content_frame,
+            text="تاريخ نهاية الدورة (للعرض)",
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            padx=10, pady=10
+        )
         end_date_frame.pack(fill=tk.X, pady=10)
 
         # حقول تاريخ النهاية
@@ -4568,16 +4671,23 @@ class ModernAttendanceSystem:
         buttons_frame = tk.Frame(edit_window, bg=self.colors["light"], pady=20)
         buttons_frame.pack(fill=tk.X, padx=10)
 
-        def save_dates():
-            """حفظ التواريخ المعدلة"""
+        def save_changes():
+            """حفظ التغييرات"""
+            new_name = new_course_name_var.get().strip()
+            new_category = category_var.get()
             start_day = start_day_entry.get().strip()
             start_month = start_month_entry.get().strip()
             start_year = start_year_entry.get().strip()
             end_day = end_day_entry.get().strip()
             end_month = end_month_entry.get().strip()
             end_year = end_year_entry.get().strip()
+            system_end_date = system_end_date_entry.get_date().strftime("%Y-%m-%d")
 
             # التحقق من صحة البيانات
+            if not new_name:
+                messagebox.showwarning("تنبيه", "اسم الدورة لا يمكن أن يكون فارغاً")
+                return
+
             if (start_day or start_month or start_year) and not (start_day and start_month and start_year):
                 messagebox.showwarning("تنبيه", "يجب إدخال تاريخ بداية الدورة كاملاً (اليوم والشهر والسنة)")
                 return
@@ -4586,10 +4696,61 @@ class ModernAttendanceSystem:
                 messagebox.showwarning("تنبيه", "يجب إدخال تاريخ نهاية الدورة كاملاً (اليوم والشهر والسنة)")
                 return
 
-            # حفظ التواريخ الجديدة
-            if self.save_course_dates(course_name, start_day, start_month, start_year, end_day, end_month, end_year):
-                messagebox.showinfo("نجاح", "تم حفظ تواريخ الدورة بنجاح")
+            try:
+                with self.conn:
+                    # إذا تم تغيير اسم الدورة
+                    if new_name != course_name:
+                        # التحقق من عدم وجود دورة بنفس الاسم الجديد
+                        cursor.execute("SELECT COUNT(*) FROM course_info WHERE course_name=?", (new_name,))
+                        if cursor.fetchone()[0] > 0:
+                            messagebox.showwarning("تنبيه", f"يوجد دورة أخرى بنفس الاسم '{new_name}'")
+                            return
+
+                        # تحديث اسم الدورة في جميع الجداول المرتبطة
+                        # 1. جدول المتدربين
+                        self.conn.execute("UPDATE trainees SET course=? WHERE course=?", (new_name, course_name))
+
+                        # 2. جدول الحضور
+                        self.conn.execute("UPDATE attendance SET course=? WHERE course=?", (new_name, course_name))
+
+                        # 3. جدول الفصول
+                        self.conn.execute("UPDATE course_sections SET course_name=? WHERE course_name=?",
+                                          (new_name, course_name))
+
+                        # 4. جدول توزيع المتدربين على الفصول
+                        self.conn.execute("UPDATE student_sections SET course_name=? WHERE course_name=?",
+                                          (new_name, course_name))
+
+                        # 5. جدول معلومات الدورة
+                        self.conn.execute("""
+                            UPDATE course_info 
+                            SET course_name=?, start_day=?, start_month=?, start_year=?, 
+                                end_day=?, end_month=?, end_year=?, end_date_system=?,
+                                course_category=?
+                            WHERE course_name=?
+                        """, (new_name, start_day, start_month, start_year, end_day, end_month, end_year,
+                              system_end_date, new_category, course_name))
+                    else:
+                        # تحديث البيانات فقط
+                        self.conn.execute("""
+                            UPDATE course_info 
+                            SET start_day=?, start_month=?, start_year=?, 
+                                end_day=?, end_month=?, end_year=?, end_date_system=?,
+                                course_category=?
+                            WHERE course_name=?
+                        """, (start_day, start_month, start_year, end_day, end_month, end_year,
+                              system_end_date, new_category, course_name))
+
+                messagebox.showinfo("نجاح", "تم حفظ التغييرات بنجاح")
                 edit_window.destroy()
+
+                # تحديث البيانات المعروضة
+                self.update_statistics()
+                self.update_students_tree()
+                self.update_attendance_display()
+
+            except Exception as e:
+                messagebox.showerror("خطأ", f"حدث خطأ أثناء حفظ التغييرات: {str(e)}")
 
         save_btn = tk.Button(
             buttons_frame,
@@ -4600,7 +4761,7 @@ class ModernAttendanceSystem:
             padx=15, pady=5,
             bd=0, relief=tk.FLAT,
             cursor="hand2",
-            command=save_dates
+            command=save_changes
         )
         save_btn.pack(side=tk.LEFT, padx=10)
 
@@ -4617,8 +4778,6 @@ class ModernAttendanceSystem:
         )
         cancel_btn.pack(side=tk.RIGHT, padx=10)
 
-  
-   
     def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
         """إضافة أو إزالة استبعاد المتدرب"""
         if not self.current_user["permissions"]["can_edit_students"]:
@@ -4686,38 +4845,7 @@ class ModernAttendanceSystem:
             profile_window.destroy()
             self.view_student_profile()
 
-
     def export_course_completion(self):
-        """تصدير تكميل الدورات في تبويب استعراض الحضور"""
-        # التحقق من تواريخ انتهاء الدورات أولاً
-        current_date = datetime.datetime.now().date()
-        cursor = self.conn.cursor()
-
-        # الحصول على الدورات التي تجاوزت تاريخ النهاية
-        cursor.execute("""
-            SELECT course_name, end_date_system
-            FROM course_info
-            WHERE end_date_system IS NOT NULL AND end_date_system != ''
-        """)
-
-        expired_courses = []
-        for course_name, end_date_str in cursor.fetchall():
-            try:
-                end_date = datetime.datetime.strptime(end_date_str, "%Y-%m-%d").date()
-                if current_date > end_date:
-                    expired_courses.append(course_name)
-            except:
-                continue
-
-        if expired_courses:
-            courses_list = "\n".join(f"- {course}" for course in expired_courses)
-            messagebox.showwarning(
-                "دورات منتهية",
-                f"لا يمكن تصدير تكميل الدورات لوجود دورات انتهت ولم يتم تخريجها:\n\n{courses_list}\n\n"
-                "يجب تخريج هذه الدورات من النظام أولاً"
-            )
-            return
-
         """وظيفة تصدير مستند تكميل الدورات بتنسيق Word مع ملخص للدورات في الصفحة الأولى مع إضافة تواريخ بداية ونهاية الدورة"""
         if not self.current_user["permissions"]["can_export_data"]:
             messagebox.showwarning("تنبيه", "ليس لديك صلاحية تصدير البيانات")
@@ -4813,6 +4941,28 @@ class ModernAttendanceSystem:
                 messagebox.showinfo("ملاحظة", "لا توجد دورات مسجلة في النظام.")
                 return
 
+            # الحصول على المتدربين الذين لديهم غيابات أكثر من يومين
+            cursor.execute("""
+                SELECT t.national_id, t.name, t.rank, t.course, COUNT(*) as absence_count
+                FROM trainees t
+                JOIN attendance a ON t.national_id = a.national_id
+                WHERE a.status = 'غائب' AND t.is_excluded = 0
+                GROUP BY t.national_id, t.name, t.rank, t.course
+                HAVING COUNT(*) > 2
+                ORDER BY absence_count DESC, t.name
+            """)
+            multiple_absences_data = cursor.fetchall()
+
+            # الحصول على بيانات المستبعدين من جميع الدورات
+            today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("""
+                SELECT name, rank, national_id, course, exclusion_reason, excluded_date
+                FROM trainees
+                WHERE is_excluded = 1
+                ORDER BY excluded_date DESC, name
+            """)
+            excluded_students_data = cursor.fetchall()
+
             # تصنيف البيانات حسب الحالة
             absent_data = [student for student in all_attendance_data if student[4] == 'غائب']
             not_started_data = [student for student in all_attendance_data if student[4] == 'لم يباشر']
@@ -4861,14 +5011,6 @@ class ModernAttendanceSystem:
             hospital_count = stats[9] or 0
             total_recorded_count = stats[10] or 0
 
-            # تحديد العناوين التي سيتم عرضها في الجدول بناءً على وجود قيم
-            # (نعرض العمود فقط إذا كانت هناك حالة واحدة على الأقل)
-            show_field_app = any(course[7] > 0 for course in courses_stats)
-            show_student_day = any(course[8] > 0 for course in courses_stats)
-            show_evening_remote = any(course[9] > 0 for course in courses_stats)
-            show_death_case = any(course[10] > 0 for course in courses_stats)
-            show_hospital = any(course[11] > 0 for course in courses_stats)
-
             # إنشاء مستند Word جديد
             doc = Document()
 
@@ -4882,6 +5024,7 @@ class ModernAttendanceSystem:
             section.top_margin = Inches(0.7)
             section.bottom_margin = Inches(0.7)
 
+            # ============== الصفحة الأولى: ملخص الدورات ==============
             # إضافة العنوان المعدل
             title = doc.add_heading(
                 f'التكميل اليومي لدورات التخصصية المنعقدة بمدينة تدريب الامن العام بالمنطقة الشرقية ليوم {arabic_weekday} بتاريخ {arabic_date}',
@@ -4908,6 +5051,13 @@ class ModernAttendanceSystem:
             doc.add_paragraph()
 
             # حساب عدد الأعمدة المطلوبة بناءً على الحالات الموجودة
+            # تحديد العناوين التي سيتم عرضها في الجدول بناءً على وجود قيم
+            show_field_app = any(course[7] > 0 for course in courses_stats)
+            show_student_day = any(course[8] > 0 for course in courses_stats)
+            show_evening_remote = any(course[9] > 0 for course in courses_stats)
+            show_death_case = any(course[10] > 0 for course in courses_stats)
+            show_hospital = any(course[11] > 0 for course in courses_stats)
+
             # 9 أعمدة ثابتة ثم نضيف عمود لكل حالة موجودة
             cols_count = 9  # العدد، الدورة، بداية، نهاية، القوة، لم يباشر، غياب، تأخير، غياب بعذر
 
@@ -5058,58 +5208,51 @@ class ModernAttendanceSystem:
                         run.font.rtl = True
                         run.font.size = Pt(10)
 
-            # إضافة فقرة فاصلة قبل التوقيعات
-            doc.add_paragraph()
+            # ============== صفحة جديدة للتفاصيل ==============
+            doc.add_page_break()
 
-            # إضافة جدول للتوقيعات
-            signatures_table = doc.add_table(rows=1, cols=3)
-            signatures_table.style = 'Table Grid'
+            # إضافة عنوان صفحة التفاصيل
+            details_title = doc.add_heading(f'تفاصيل التكميل ليوم {arabic_weekday} بتاريخ {arabic_date}', level=1)
+            details_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in details_title.runs:
+                run.font.rtl = True
+                run.font.bold = True
+                run.font.size = Pt(16)
 
-            sig_cells = signatures_table.rows[0].cells
-            sig_cells[2].text = "اسم المراقب: ____________"
-            sig_cells[1].text = "رئيس قسم الفصول: ______________"
-            sig_cells[0].text = "مدير قسم شؤون المدربين: _____________"
+            # إضافة فاصل
+            border_para = doc.add_paragraph()
+            border_para.paragraph_format.border_bottom = True
 
-            for cell in sig_cells:
-                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                for run in cell.paragraphs[0].runs:
-                    run.font.rtl = True
-                    run.font.size = Pt(11)
-
-            # ============================================================================
-            # إضافة صفحة جديدة للتفاصيل - فقط للحالات المطلوبة
-            # ============================================================================
-
-            # دالة مساعدة لإضافة جدول المتدربين
-            def add_students_table(title, students_data, has_reason=False):
+            # دالة مساعدة لإضافة جدول المتدربين (معدلة لإزالة التوقيعات)
+            def add_students_table(title, students_data, has_reason=False, is_excluded=False):
                 """إضافة جدول المتدربين لحالة معينة"""
                 if not students_data:
                     return  # تخطي إذا لم تكن هناك بيانات
 
-                # إضافة صفحة جديدة
-                doc.add_page_break()
-
-                # إضافة عنوان الصفحة
-                title_para = doc.add_heading(f'{title} ليوم {arabic_weekday} بتاريخ {arabic_date}', level=1)
+                # إضافة عنوان الجدول
+                title_para = doc.add_heading(title, level=2)
                 title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in title_para.runs:
                     run.font.rtl = True
                     run.font.bold = True
-                    run.font.size = Pt(16)
-
-                # إضافة فاصل
-                border_para = doc.add_paragraph()
-                border_para.paragraph_format.border_bottom = True
+                    run.font.size = Pt(14)
 
                 # إنشاء جدول المتدربين
-                cols_count = 6 if has_reason else 5  # إضافة عمود للسبب عند الحاجة
+                if is_excluded:
+                    cols_count = 7  # للمستبعدين: العدد، الاسم، الرتبة، رقم الهوية، الدورة، سبب الاستبعاد، تاريخ الاستبعاد
+                else:
+                    cols_count = 6 if has_reason else 5  # إضافة عمود للسبب عند الحاجة
+
                 students_table = doc.add_table(rows=1, cols=cols_count)
                 students_table.style = 'Table Grid'
 
                 # تحديد عناوين الجدول
-                headers = ["العدد", "الاسم", "الرتبة", "رقم الهوية", "الدورة"]
-                if has_reason:
-                    headers.append("السبب")  # إضافة عمود السبب إذا كان مطلوباً
+                if is_excluded:
+                    headers = ["العدد", "الاسم", "الرتبة", "رقم الهوية", "الدورة", "سبب الاستبعاد", "تاريخ الاستبعاد"]
+                else:
+                    headers = ["العدد", "الاسم", "الرتبة", "رقم الهوية", "الدورة"]
+                    if has_reason:
+                        headers.append("السبب")  # إضافة عمود السبب إذا كان مطلوباً
 
                 header_cells = students_table.rows[0].cells
                 for i, header in enumerate(headers):
@@ -5131,23 +5274,36 @@ class ModernAttendanceSystem:
 
                 # إضافة بيانات المتدربين
                 for idx, student in enumerate(students_data):
-                    national_id, name, rank, course, status, reason = student
-
                     row_cells = students_table.add_row().cells
 
-                    if has_reason:
-                        row_cells[5].text = str(idx + 1)  # العدد التسلسلي
-                        row_cells[4].text = name  # الاسم
-                        row_cells[3].text = rank  # الرتبة
-                        row_cells[2].text = national_id  # رقم الهوية
-                        row_cells[1].text = course  # اسم الدورة
-                        row_cells[0].text = reason if reason else "لم يحدد سبب"  # السبب
+                    if is_excluded:
+                        # للمستبعدين: name, rank, national_id, course, exclusion_reason, excluded_date
+                        name, rank, national_id, course, exclusion_reason, excluded_date = student
+
+                        row_cells[6].text = str(idx + 1)  # العدد التسلسلي
+                        row_cells[5].text = name  # الاسم
+                        row_cells[4].text = rank  # الرتبة
+                        row_cells[3].text = national_id  # رقم الهوية
+                        row_cells[2].text = course  # اسم الدورة
+                        row_cells[1].text = exclusion_reason if exclusion_reason else "لم يحدد سبب"  # سبب الاستبعاد
+                        row_cells[0].text = excluded_date if excluded_date else ""  # تاريخ الاستبعاد
                     else:
-                        row_cells[4].text = str(idx + 1)  # العدد التسلسلي
-                        row_cells[3].text = name  # الاسم
-                        row_cells[2].text = rank  # الرتبة
-                        row_cells[1].text = national_id  # رقم الهوية
-                        row_cells[0].text = course  # اسم الدورة
+                        # للحالات الأخرى
+                        national_id, name, rank, course, status, reason = student
+
+                        if has_reason:
+                            row_cells[5].text = str(idx + 1)  # العدد التسلسلي
+                            row_cells[4].text = name  # الاسم
+                            row_cells[3].text = rank  # الرتبة
+                            row_cells[2].text = national_id  # رقم الهوية
+                            row_cells[1].text = course  # اسم الدورة
+                            row_cells[0].text = reason if reason else "لم يحدد سبب"  # السبب
+                        else:
+                            row_cells[4].text = str(idx + 1)  # العدد التسلسلي
+                            row_cells[3].text = name  # الاسم
+                            row_cells[2].text = rank  # الرتبة
+                            row_cells[1].text = national_id  # رقم الهوية
+                            row_cells[0].text = course  # اسم الدورة
 
                     # تنسيق خلايا البيانات
                     for cell in row_cells:
@@ -5164,30 +5320,13 @@ class ModernAttendanceSystem:
                 summary_text.font.rtl = True
                 summary_text.font.size = Pt(12)
 
-                # إضافة جدول التوقيعات
+                # إضافة فراغ بعد الجدول
                 doc.add_paragraph()
-                signatures_table = doc.add_table(rows=1, cols=3)
-                signatures_table.style = 'Table Grid'
 
-                sig_cells = signatures_table.rows[0].cells
-                sig_cells[2].text = "اسم المراقب: ____________"
-                sig_cells[1].text = "رئيس قسم الفصول: ______________"
-                sig_cells[0].text = "مدير قسم شؤون المدربين: _____________"
-
-                for cell in sig_cells:
-                    cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    for run in cell.paragraphs[0].runs:
-                        run.font.rtl = True
-                        run.font.size = Pt(11)
-
-            # إضافة جداول المتدربين لكل حالة (فقط للحالات المطلوبة وتجاهل الحالات المذكورة)
+            # إضافة جداول المتدربين في نفس الصفحة
             # إضافة جدول المتدربين الغائبين
             if absent_data:
                 add_students_table("بيان المتدربين الغائبين", absent_data)
-
-            # إضافة جدول المتدربين الغائبين بعذر
-            if excused_data:
-                add_students_table("بيان المتدربين الغائبين بعذر", excused_data, has_reason=True)
 
             # إضافة جدول المتدربين المتأخرين
             if late_data:
@@ -5197,18 +5336,105 @@ class ModernAttendanceSystem:
             if not_started_data:
                 add_students_table("بيان المتدربين في حالة لم يباشر", not_started_data)
 
-            # لا نضيف الجداول التالية كما هو مطلوب:
-            # - بيان المتدربين في التطبيق الميداني
-            # - بيان متدربين يوم المتدرب
-            # - بيان متدربين المسائية/عن بعد
-
-            # نضيف فقط جداول حالات الوفاة والمنومين
+            # إضافة جدول حالات الوفاة
             if death_case_data:
                 add_students_table("بيان المتدربين في حالة وفاة", death_case_data, has_reason=True)
 
             # إضافة جدول المتدربين المنومين
             if hospital_data:
                 add_students_table("بيان المتدربين المنومين", hospital_data, has_reason=True)
+
+            # إضافة جدول المتدربين الذين لديهم غيابات أكثر من يومين
+            if multiple_absences_data:
+                title_para = doc.add_heading("بيان المتدربين الذين لديهم غيابات متكررة (أكثر من يومين)", level=2)
+                title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in title_para.runs:
+                    run.font.rtl = True
+                    run.font.bold = True
+                    run.font.size = Pt(14)
+
+                # إنشاء جدول للغيابات المتكررة
+                absence_table = doc.add_table(rows=1, cols=6)
+                absence_table.style = 'Table Grid'
+
+                # عناوين الجدول
+                headers = ["العدد", "الاسم", "الرتبة", "رقم الهوية", "الدورة", "عدد أيام الغياب"]
+                header_cells = absence_table.rows[0].cells
+
+                for i, header in enumerate(headers):
+                    idx = len(headers) - i - 1
+                    header_cells[idx].text = header
+                    header_cells[idx].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                    for run in header_cells[idx].paragraphs[0].runs:
+                        run.font.bold = True
+                        run.font.rtl = True
+                        run.font.size = Pt(12)
+
+                    # إضافة تظليل للعناوين
+                    try:
+                        shading_elm = parse_xml(r'<w:shd {} w:fill="FFDDDD"/>'.format(nsdecls('w')))
+                        header_cells[idx]._element.get_or_add_tcPr().append(shading_elm)
+                    except:
+                        pass
+
+                # إضافة بيانات المتدربين
+                for idx, (national_id, name, rank, course, absence_count) in enumerate(multiple_absences_data):
+                    row_cells = absence_table.add_row().cells
+
+                    row_cells[5].text = str(idx + 1)  # العدد التسلسلي
+                    row_cells[4].text = name  # الاسم
+                    row_cells[3].text = rank  # الرتبة
+                    row_cells[2].text = national_id  # رقم الهوية
+                    row_cells[1].text = course  # اسم الدورة
+                    row_cells[0].text = str(absence_count)  # عدد أيام الغياب
+
+                    # تنسيق خلايا البيانات
+                    for cell in row_cells:
+                        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        for run in cell.paragraphs[0].runs:
+                            run.font.rtl = True
+                            run.font.size = Pt(11)
+
+                # إضافة إجمالي عدد المتدربين
+                summary_para = doc.add_paragraph()
+                summary_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                summary_text = summary_para.add_run(
+                    f"إجمالي عدد المتدربين ذوي الغيابات المتكررة: {len(multiple_absences_data)}")
+                summary_text.font.bold = True
+                summary_text.font.rtl = True
+                summary_text.font.size = Pt(12)
+
+                doc.add_paragraph()
+
+            # إضافة جدول المستبعدين من جميع الدورات
+            if excluded_students_data:
+                title_para = doc.add_heading(f"المستبعدين من جميع الدورات المنعقدة حتى تاريخ {today_date}", level=2)
+                title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in title_para.runs:
+                    run.font.rtl = True
+                    run.font.bold = True
+                    run.font.size = Pt(14)
+
+                add_students_table("", excluded_students_data, is_excluded=True)
+
+            # إضافة التوقيعات في نهاية المستند فقط
+            doc.add_paragraph()
+            doc.add_paragraph()
+
+            signatures_table = doc.add_table(rows=1, cols=3)
+            signatures_table.style = 'Table Grid'
+
+            sig_cells = signatures_table.rows[0].cells
+            sig_cells[2].text = "اسم المراقب: ____________"
+            sig_cells[1].text = "رئيس قسم الفصول: ______________"
+            sig_cells[0].text = "مدير قسم شؤون المدربين: _____________"
+
+            for cell in sig_cells:
+                cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in cell.paragraphs[0].runs:
+                    run.font.rtl = True
+                    run.font.size = Pt(11)
 
             # حفظ المستند
             export_file = filedialog.asksaveasfilename(
@@ -5515,8 +5741,6 @@ class ModernAttendanceSystem:
 
         except Exception as e:
             messagebox.showerror("خطأ", str(e))
-
-  
 
     def export_course_diligence_behavior(self, course_name):
         """وظيفة تصدير بيان المواظبة والسلوك للدورة بتنسيق Word مع ترتيب المتدربين حسب الدرجة"""
@@ -5900,7 +6124,7 @@ class ModernAttendanceSystem:
         )
         refresh_btn.pack(side=tk.LEFT, padx=5)
 
-        #زر تعديل تاريخ الدورة
+        # زر تعديل تاريخ الدورة
         edit_course_info_btn = tk.Button(
             course_frame,
             text="تعديل تواريخ الدورة",
@@ -5928,7 +6152,6 @@ class ModernAttendanceSystem:
                 command=lambda: delete_entire_course()
             )
             delete_course_btn.pack(side=tk.LEFT, padx=5)
-
 
         # إطار عرض الفصول
         sections_frame = tk.LabelFrame(
@@ -7750,7 +7973,8 @@ class ModernAttendanceSystem:
             section.bottom_margin = Inches(0.7)
 
             # إضافة عنوان المستند
-            title = doc.add_heading(f'بيان المواظبة والسلوك لمتدربين فصل: {section_name} - دورة: {course_name}', level=0)
+            title = doc.add_heading(f'بيان المواظبة والسلوك لمتدربين فصل: {section_name} - دورة: {course_name}',
+                                    level=0)
             title.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for run in title.runs:
                 run.font.size = Pt(16)
