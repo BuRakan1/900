@@ -4819,7 +4819,7 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
         self.view_student_profile()
 
     def export_course_completion(self):
-        """وظيفة تصدير مستند تكميل الدورات بتنسيق Word مع ملخص للدورات في الصفحة الأولى مع إضافة تواريخ بداية ونهاية الدورة"""
+        """وظيفة تصدير مستند تكميل الدورات بتنسيق Word مع ملخص للدورات في الصفحة الأولى مع إضافة تواريخ بداية ونهاية الدورة وفئة الدورة"""
         if not self.current_user["permissions"]["can_export_data"]:
             messagebox.showwarning("تنبيه", "ليس لديك صلاحية تصدير البيانات")
             return
@@ -4834,8 +4834,8 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             # الحصول على تاريخ اليوم المحدد
             selected_date = self.log_date_entry.get_date()
             selected_date_str = selected_date.strftime("%Y-%m-%d")
-            # تنسيق التاريخ بشكل أفضل للعرض
-            arabic_date = selected_date.strftime("%Y/%m/%d")
+            # تنسيق التاريخ بشكل أفضل للعرض (يوم/شهر/سنة)
+            arabic_date = selected_date.strftime("%d/%m/%Y")
 
             # تحديد يوم الأسبوع بالعربية
             weekday = selected_date.weekday()
@@ -4845,25 +4845,25 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             # استعلام إجمالي عدد المتدربين في النظام (غير المستبعدين)
             cursor = self.conn.cursor()
             cursor.execute("""
-            SELECT COUNT(*)
-            FROM trainees
-            WHERE is_excluded=0
-        """)
+                SELECT COUNT(*)
+                FROM trainees
+                WHERE is_excluded=0
+            """)
             total_students_count = cursor.fetchone()[0]
 
             # الحصول على عدد المتدربين غير المسجلين بعد
             cursor.execute("""
-            SELECT COUNT(*)
-            FROM trainees t
-            WHERE t.is_excluded=0 AND NOT EXISTS (
-                SELECT 1 FROM attendance a
-                WHERE a.national_id = t.national_id AND a.date = ?
-            )
-        """, (selected_date_str,))
+                SELECT COUNT(*)
+                FROM trainees t
+                WHERE t.is_excluded=0 AND NOT EXISTS (
+                    SELECT 1 FROM attendance a
+                    WHERE a.national_id = t.national_id AND a.date = ?
+                )
+            """, (selected_date_str,))
 
             unrecorded_count = cursor.fetchone()[0]
 
-            # التحقق من عدم وجود متدربين غير مسجلين (وفقاً لطلب المستخدم)
+            # التحقق من عدم وجود متدربين غير مسجلين
             if unrecorded_count > 0:
                 messagebox.showwarning("تنبيه",
                                        f"لا يمكن تصدير التكميل، هناك {unrecorded_count} متدرب لم يتم تسجيل حضورهم/غيابهم بعد.")
@@ -4871,42 +4871,54 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
 
             # استعلام بيانات المتدربين الغائبين والذين لم يباشروا والغائبين بعذر وجميع الحالات الأخرى
             cursor.execute("""
-            SELECT a.national_id, a.name, a.rank, a.course, a.status, a.excuse_reason
-            FROM attendance a
-            JOIN trainees t ON a.national_id = t.national_id
-            WHERE a.date=? AND t.is_excluded=0 AND a.status IN ('غائب', 'لم يباشر', 'غائب بعذر', 'متأخر', 'تطبيق ميداني', 'يوم طالب', 'مسائية / عن بعد', 'حالة وفاة', 'منوم')
-        """, (selected_date_str,))
+                SELECT a.national_id, a.name, a.rank, a.course, a.status, a.excuse_reason
+                FROM attendance a
+                JOIN trainees t ON a.national_id = t.national_id
+                WHERE a.date=? AND t.is_excluded=0 AND a.status IN ('غائب', 'لم يباشر', 'غائب بعذر', 'متأخر', 'تطبيق ميداني', 'يوم طالب', 'مسائية / عن بعد', 'حالة وفاة', 'منوم')
+                ORDER BY a.course, a.name
+            """, (selected_date_str,))
             all_attendance_data = cursor.fetchall()
 
             if not all_attendance_data and total_students_count == 0:
                 messagebox.showinfo("ملاحظة", "لا توجد بيانات غياب أو متدربين في النظام لهذا اليوم.")
                 return
 
-            # الحصول على إحصائيات الدورات ولكن فقط التي لها قيم (لا نريد أعمدة صفرية)
+            # الحصول على إحصائيات الدورات مع فئة الدورة وتاريخ النهاية
             cursor.execute("""
-            SELECT 
-                t.course,
-                COUNT(DISTINCT t.national_id) as total_course_students,
-                COUNT(DISTINCT CASE WHEN a.status = 'حاضر' THEN a.national_id END) as present_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'غائب' THEN a.national_id END) as absent_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'غائب بعذر' THEN a.national_id END) as excused_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'متأخر' THEN a.national_id END) as late_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'لم يباشر' THEN a.national_id END) as not_started_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'تطبيق ميداني' THEN a.national_id END) as field_app_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'يوم طالب' THEN a.national_id END) as student_day_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'مسائية / عن بعد' THEN a.national_id END) as evening_remote_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'حالة وفاة' THEN a.national_id END) as death_case_count,
-                COUNT(DISTINCT CASE WHEN a.status = 'منوم' THEN a.national_id END) as hospital_count,
-                COUNT(DISTINCT CASE WHEN a.status IS NOT NULL THEN a.national_id END) as recorded_count
-            FROM 
-                trainees t
-            LEFT JOIN 
-                attendance a ON t.national_id = a.national_id AND a.date = ?
-            WHERE 
-                t.is_excluded = 0
-            GROUP BY 
-                t.course
-        """, (selected_date_str,))
+                SELECT 
+                    t.course,
+                    COUNT(DISTINCT t.national_id) as total_course_students,
+                    COUNT(DISTINCT CASE WHEN a.status = 'حاضر' THEN a.national_id END) as present_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'غائب' THEN a.national_id END) as absent_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'غائب بعذر' THEN a.national_id END) as excused_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'متأخر' THEN a.national_id END) as late_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'لم يباشر' THEN a.national_id END) as not_started_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'تطبيق ميداني' THEN a.national_id END) as field_app_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'يوم طالب' THEN a.national_id END) as student_day_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'مسائية / عن بعد' THEN a.national_id END) as evening_remote_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'حالة وفاة' THEN a.national_id END) as death_case_count,
+                    COUNT(DISTINCT CASE WHEN a.status = 'منوم' THEN a.national_id END) as hospital_count,
+                    COUNT(DISTINCT CASE WHEN a.status IS NOT NULL THEN a.national_id END) as recorded_count,
+                    COALESCE(ci.course_category, 'مشتركة') as category,
+                    ci.end_date_system
+                FROM 
+                    trainees t
+                LEFT JOIN 
+                    attendance a ON t.national_id = a.national_id AND a.date = ?
+                LEFT JOIN 
+                    course_info ci ON t.course = ci.course_name
+                WHERE 
+                    t.is_excluded = 0
+                GROUP BY 
+                    t.course
+                ORDER BY 
+                    CASE 
+                        WHEN ci.end_date_system IS NULL THEN 1
+                        ELSE 0
+                    END,
+                    ci.end_date_system DESC,
+                    t.course
+            """, (selected_date_str,))
 
             courses_stats = cursor.fetchall()
 
@@ -4914,62 +4926,72 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
                 messagebox.showinfo("ملاحظة", "لا توجد دورات مسجلة في النظام.")
                 return
 
-            # الحصول على المتدربين الذين لديهم غيابات أكثر من يومين
+            # الحصول على المتدربين الذين لديهم غيابات أكثر من يومين حتى التاريخ المحدد
             cursor.execute("""
-            SELECT t.national_id, t.name, t.rank, t.course, COUNT(*) as absence_count
-            FROM trainees t
-            JOIN attendance a ON t.national_id = a.national_id
-            WHERE a.status = 'غائب' AND t.is_excluded = 0
-            GROUP BY t.national_id, t.name, t.rank, t.course
-            HAVING COUNT(*) > 2
-            ORDER BY absence_count DESC, t.name
-        """)
+                SELECT t.national_id, t.name, t.rank, t.course, COUNT(*) as absence_count
+                FROM trainees t
+                JOIN attendance a ON t.national_id = a.national_id
+                WHERE a.status = 'غائب' AND t.is_excluded = 0 AND a.date <= ?
+                GROUP BY t.national_id, t.name, t.rank, t.course
+                HAVING COUNT(*) > 2
+                ORDER BY t.course, absence_count DESC, t.name
+            """, (selected_date_str,))
             multiple_absences_data = cursor.fetchall()
 
             # الحصول على بيانات المستبعدين من جميع الدورات
-            today_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            today_date = datetime.datetime.now().strftime("%d/%m/%Y")
             cursor.execute("""
-            SELECT name, rank, national_id, course, exclusion_reason, excluded_date
-            FROM trainees
-            WHERE is_excluded = 1
-            ORDER BY excluded_date DESC, name
-        """)
+                SELECT name, rank, national_id, course, exclusion_reason, excluded_date
+                FROM trainees
+                WHERE is_excluded = 1
+                ORDER BY course, excluded_date DESC, name
+            """)
             excluded_students_data = cursor.fetchall()
 
-            # تصنيف البيانات حسب الحالة
-            absent_data = [student for student in all_attendance_data if student[4] == 'غائب']
-            not_started_data = [student for student in all_attendance_data if student[4] == 'لم يباشر']
-            excused_data = [student for student in all_attendance_data if student[4] == 'غائب بعذر']
-            late_data = [student for student in all_attendance_data if student[4] == 'متأخر']
-            field_app_data = [student for student in all_attendance_data if student[4] == 'تطبيق ميداني']
-            student_day_data = [student for student in all_attendance_data if student[4] == 'يوم طالب']
-            evening_remote_data = [student for student in all_attendance_data if student[4] == 'مسائية / عن بعد']
-            death_case_data = [student for student in all_attendance_data if student[4] == 'حالة وفاة']
-            hospital_data = [student for student in all_attendance_data if student[4] == 'منوم']
+            # تصنيف البيانات حسب الحالة (مرتبة حسب الدورة)
+            absent_data = sorted([student for student in all_attendance_data if student[4] == 'غائب'],
+                                 key=lambda x: (x[3], x[1]))  # ترتيب حسب الدورة ثم الاسم
+            not_started_data = sorted([student for student in all_attendance_data if student[4] == 'لم يباشر'],
+                                      key=lambda x: (x[3], x[1]))
+            excused_data = sorted([student for student in all_attendance_data if student[4] == 'غائب بعذر'],
+                                  key=lambda x: (x[3], x[1]))
+            late_data = sorted([student for student in all_attendance_data if student[4] == 'متأخر'],
+                               key=lambda x: (x[3], x[1]))
+            field_app_data = sorted([student for student in all_attendance_data if student[4] == 'تطبيق ميداني'],
+                                    key=lambda x: (x[3], x[1]))
+            student_day_data = sorted([student for student in all_attendance_data if student[4] == 'يوم طالب'],
+                                      key=lambda x: (x[3], x[1]))
+            evening_remote_data = sorted(
+                [student for student in all_attendance_data if student[4] == 'مسائية / عن بعد'],
+                key=lambda x: (x[3], x[1]))
+            death_case_data = sorted([student for student in all_attendance_data if student[4] == 'حالة وفاة'],
+                                     key=lambda x: (x[3], x[1]))
+            hospital_data = sorted([student for student in all_attendance_data if student[4] == 'منوم'],
+                                   key=lambda x: (x[3], x[1]))
 
             # استعلام إحصائيات الحضور الإجمالية لهذا اليوم
             cursor.execute("""
-            SELECT 
-                COUNT(CASE WHEN a.status = 'حاضر' THEN 1 END) as present_count,
-                COUNT(CASE WHEN a.status = 'غائب' THEN 1 END) as absent_count,
-                COUNT(CASE WHEN a.status = 'غائب بعذر' THEN 1 END) as excused_count,
-                COUNT(CASE WHEN a.status = 'متأخر' THEN 1 END) as late_count,
-                COUNT(CASE WHEN a.status = 'لم يباشر' THEN 1 END) as not_started_count,
-                COUNT(CASE WHEN a.status = 'تطبيق ميداني' THEN 1 END) as field_app_count,
-                COUNT(CASE WHEN a.status = 'يوم طالب' THEN 1 END) as student_day_count,
-                COUNT(CASE WHEN a.status = 'مسائية / عن بعد' THEN 1 END) as evening_remote_count,
-                COUNT(CASE WHEN a.status = 'حالة وفاة' THEN 1 END) as death_case_count,
-                COUNT(CASE WHEN a.status = 'منوم' THEN 1 END) as hospital_count,
-                COUNT(*) as total_recorded_count
-            FROM attendance a
-            JOIN trainees t ON a.national_id = t.national_id
-            WHERE a.date=? AND t.is_excluded=0
-        """, (selected_date_str,))
+                SELECT 
+                    COUNT(CASE WHEN a.status = 'حاضر' THEN 1 END) as present_count,
+                    COUNT(CASE WHEN a.status = 'غائب' THEN 1 END) as absent_count,
+                    COUNT(CASE WHEN a.status = 'غائب بعذر' THEN 1 END) as excused_count,
+                    COUNT(CASE WHEN a.status = 'متأخر' THEN 1 END) as late_count,
+                    COUNT(CASE WHEN a.status = 'لم يباشر' THEN 1 END) as not_started_count,
+                    COUNT(CASE WHEN a.status = 'تطبيق ميداني' THEN 1 END) as field_app_count,
+                    COUNT(CASE WHEN a.status = 'يوم طالب' THEN 1 END) as student_day_count,
+                    COUNT(CASE WHEN a.status = 'مسائية / عن بعد' THEN 1 END) as evening_remote_count,
+                    COUNT(CASE WHEN a.status = 'حالة وفاة' THEN 1 END) as death_case_count,
+                    COUNT(CASE WHEN a.status = 'منوم' THEN 1 END) as hospital_count,
+                    COUNT(*) as total_recorded_count
+                FROM attendance a
+                JOIN trainees t ON a.national_id = t.national_id
+                WHERE a.date=? AND t.is_excluded=0
+            """, (selected_date_str,))
             stats = cursor.fetchone()
 
-            # إذا لم تتوفر إحصائيات (لا يتوقع حدوث ذلك)
+            # إذا لم تتوفر إحصائيات
             if not stats:
-                stats = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)  # قيم افتراضية شاملة الحالات الجديدة
+                stats = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
             # أعداد الحضور والغياب
             present_count = stats[0] or 0
@@ -5024,15 +5046,14 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             doc.add_paragraph()
 
             # حساب عدد الأعمدة المطلوبة بناءً على الحالات الموجودة
-            # تحديد العناوين التي سيتم عرضها في الجدول بناءً على وجود قيم
             show_field_app = any(course[7] > 0 for course in courses_stats)
             show_student_day = any(course[8] > 0 for course in courses_stats)
             show_evening_remote = any(course[9] > 0 for course in courses_stats)
             show_death_case = any(course[10] > 0 for course in courses_stats)
             show_hospital = any(course[11] > 0 for course in courses_stats)
 
-            # 9 أعمدة ثابتة ثم نضيف عمود لكل حالة موجودة
-            cols_count = 9  # العدد، الدورة، بداية، نهاية، القوة، لم يباشر، غياب، تأخير، غياب بعذر
+            # 10 أعمدة ثابتة مع إضافة عمود فئة الدورة
+            cols_count = 10  # العدد، الدورة، فئة الدورة، بداية، نهاية، القوة، لم يباشر، غياب، تأخير، غياب بعذر
 
             # إضافة أعمدة إضافية للحالات الموجودة فقط
             if show_field_app:
@@ -5049,13 +5070,13 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             # إضافة عمود العدد الفعلي دائماً
             cols_count += 1
 
-            # إنشاء جدول ملخص الدورات في الصفحة الأولى مع أعمدة إضافية لتاريخ بداية ونهاية الدورة
+            # إنشاء جدول ملخص الدورات في الصفحة الأولى
             courses_table = doc.add_table(rows=1, cols=cols_count)
             courses_table.style = 'Table Grid'
 
             # إنشاء قائمة العناوين
             headers = [
-                "العدد", "اسم الدورة",
+                "العدد", "اسم الدورة", "فئة الدورة",
                 "تاريخ بداية الدورة", "تاريخ نهاية الدورة",
                 "القوة", "لم يباشر", "غياب", "تأخير", "غياب بعذر"
             ]
@@ -5094,7 +5115,7 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
                     shading_elm = parse_xml(r'<w:shd {} w:fill="DDDDDD"/>'.format(nsdecls('w')))
                     header_cells[idx]._element.get_or_add_tcPr().append(shading_elm)
                 except:
-                    pass  # تجاهل الخطأ إذا حدث
+                    pass
 
             # متغيرات لحساب المجاميع
             total_strength = 0
@@ -5124,6 +5145,8 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
                 death_case_count = course_data[10] or 0
                 hospital_count = course_data[11] or 0
                 recorded_count = course_data[12] or 0
+                course_category = course_data[13] or "مشتركة"
+                end_date_system = course_data[14]
 
                 # تحديث المجاميع
                 total_strength += total_course_students
@@ -5139,10 +5162,10 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
 
                 # الحصول على تواريخ البداية والنهاية للدورة من قاعدة البيانات
                 cursor.execute("""
-                SELECT start_day, start_month, start_year, end_day, end_month, end_year
-                FROM course_info
-                WHERE course_name=?
-            """, (course_name,))
+                    SELECT start_day, start_month, start_year, end_day, end_month, end_year
+                    FROM course_info
+                    WHERE course_name=?
+                """, (course_name,))
                 date_info = cursor.fetchone()
 
                 start_date_str = ""
@@ -5156,14 +5179,8 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
                         end_date_str = f"{end_day}/{end_month}/{end_year}"
 
                 # حساب العدد الفعلي (بعد خصم جميع الحالات المذكورة)
-                # العدد الفعلي = عدد الحاضرين فقط
                 effective_count = present_count
                 total_effective += effective_count
-
-                # حساب المجموع
-                total_status_count = (absent_count + excused_count + late_count + not_started_count +
-                                      field_app_count + student_day_count + evening_remote_count +
-                                      death_case_count + hospital_count + present_count)
 
                 row_cells = courses_table.add_row().cells
 
@@ -5171,9 +5188,10 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
                 values = [
                     str(idx + 1),  # العدد التسلسلي للدورة
                     course_name,  # اسم الدورة
+                    course_category,  # فئة الدورة
                     start_date_str,  # تاريخ بداية الدورة
                     end_date_str,  # تاريخ نهاية الدورة
-                    str(total_course_students),  # القوة (إجمالي عدد المتدربين في الدورة)
+                    str(total_course_students),  # القوة
                     str(not_started_count),  # عدد حالات "لم يباشر"
                     str(absent_count),  # عدد حالات الغياب
                     str(late_count),  # عدد حالات التأخير
@@ -5214,6 +5232,7 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             total_values = [
                 "",  # العدد التسلسلي (فارغ)
                 "المجموع",  # اسم الدورة
+                "",  # فئة الدورة (فارغ)
                 "",  # تاريخ بداية (فارغ)
                 "",  # تاريخ نهاية (فارغ)
                 str(total_strength),  # إجمالي القوة
@@ -5263,7 +5282,7 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
 
             # دالة مساعدة لإضافة جدول المتدربين (معدلة لإضافة اليوم والتاريخ في العنوان)
             def add_students_table(title, students_data, has_reason=False, is_excluded=False,
-                                   include_date_in_title=True):
+                                   include_date_in_title=True, has_course_column=False):
                 """إضافة جدول المتدربين لحالة معينة"""
                 if not students_data:
                     return  # تخطي إذا لم تكن هناك بيانات
@@ -5373,6 +5392,10 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             if absent_data:
                 add_students_table("بيان المتدربين الغائبين", absent_data)
 
+            # إضافة جدول المتدربين الغائبين بعذر
+            if excused_data:
+                add_students_table("بيان المتدربين الغائبين بعذر", excused_data, has_reason=True)
+
             # إضافة جدول المتدربين المتأخرين
             if late_data:
                 add_students_table("بيان المتدربين المتأخرين", late_data)
@@ -5389,9 +5412,14 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
             if hospital_data:
                 add_students_table("بيان المتدربين المنومين", hospital_data, has_reason=True)
 
+            # صفحة جديدة للغيابات المتكررة والمستبعدين
+            if multiple_absences_data or excluded_students_data:
+                doc.add_page_break()
+
             # إضافة جدول المتدربين الذين لديهم غيابات أكثر من يومين
             if multiple_absences_data:
-                title_para = doc.add_heading("بيان المتدربين الذين لديهم غيابات متكررة (أكثر من يومين)", level=2)
+                title_para = doc.add_heading(
+                    f"بيان المتدربين الذين لديهم غيابات متكررة (أكثر من يومين) حتى تاريخ {arabic_date}", level=2)
                 title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 for run in title_para.runs:
                     run.font.rtl = True
@@ -5452,7 +5480,7 @@ def toggle_student_exclusion(self, national_id, exclude, profile_window=None):
 
                 doc.add_paragraph()
 
-            # إضافة جدول المستبعدين من جميع الدورات
+            # إضافة جدول المستبعدين من جميع الدورات في نفس الصفحة
             if excluded_students_data:
                 title_para = doc.add_heading(f"المستبعدين من جميع الدورات المنعقدة حتى تاريخ {today_date}", level=2)
                 title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
