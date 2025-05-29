@@ -1,3 +1,874 @@
+
+    
+
+class LoginSystem:
+    def __init__(self, root):
+        self.root = root
+        self.db_conn = self.connect_to_db()
+        self.current_user = None
+        self.create_users_table()
+        self.create_permissions_table()
+        self.check_admin_exists()
+        self.setup_login_window()
+
+    def connect_to_db(self):
+        try:
+            conn = sqlite3.connect("attendance.db")
+            return conn
+        except Exception as e:
+            messagebox.showerror("خطأ في قاعدة البيانات", f"لا يمكن الاتصال بقاعدة البيانات: {str(e)}")
+            exit(1)
+
+    def create_users_table(self):
+        try:
+            with self.db_conn:
+                try:
+                    self.db_conn.execute("ALTER TABLE users DROP COLUMN role")
+                except:
+                    pass
+                self.db_conn.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE,
+                        password TEXT,
+                        full_name TEXT,
+                        created_date TEXT,
+                        last_login TEXT,
+                        is_active INTEGER DEFAULT 1
+                    )
+                """)
+        except Exception as e:
+            messagebox.showerror("خطأ", f"تعذّر إنشاء/تعديل جدول المستخدمين: {str(e)}")
+
+    def create_permissions_table(self):
+        try:
+            with self.db_conn:
+                self.db_conn.execute("""
+                    CREATE TABLE IF NOT EXISTS user_permissions (
+                        user_id INTEGER PRIMARY KEY,
+                        can_edit_attendance INTEGER DEFAULT 1,
+                        can_add_students INTEGER DEFAULT 1,
+                        can_edit_students INTEGER DEFAULT 1,
+                        can_delete_students INTEGER DEFAULT 0,
+                        can_view_edit_history INTEGER DEFAULT 0,
+                        can_reset_attendance INTEGER DEFAULT 0,
+                        can_export_data INTEGER DEFAULT 1,
+                        can_import_data INTEGER DEFAULT 0,
+                        is_admin INTEGER DEFAULT 0,
+                        FOREIGN KEY (user_id) REFERENCES users(id)
+                    )
+                """)
+        except Exception as e:
+            messagebox.showerror("خطأ", f"تعذّر إنشاء جدول الصلاحيات: {str(e)}")
+
+    def check_admin_exists(self):
+        cursor = self.db_conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE username='admin'")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            hashed_pwd = hashlib.sha256("admin123".encode()).hexdigest()
+            try:
+                with self.db_conn:
+                    self.db_conn.execute("""
+                        INSERT INTO users (username, password, full_name, created_date, is_active)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        'admin',
+                        hashed_pwd,
+                        'المسؤول الرئيسي',
+                        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        1
+                    ))
+                    cursor.execute("SELECT id FROM users WHERE username='admin'")
+                    admin_id = cursor.fetchone()[0]
+                    self.db_conn.execute("""
+                        INSERT INTO user_permissions (
+                            user_id, can_edit_attendance, can_add_students, 
+                            can_edit_students, can_delete_students, can_view_edit_history,
+                            can_reset_attendance, can_export_data, can_import_data, is_admin
+                        ) VALUES (?, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+                    """, (admin_id,))
+            except Exception as e:
+                messagebox.showerror("خطأ", f"تعذّر إنشاء حساب المدير الرئيسي: {str(e)}")
+
+    def setup_login_window(self):
+        self.colors = {
+            "primary": "#1E40AF",
+            "secondary": "#3B82F6",
+            "background": "#F1F5F9",
+            "card": "#FFFFFF",
+            "text": "#1F2937",
+            "border": "#E5E7EB",
+            "error": "#EF4444"
+        }
+        self.fonts = {
+            "heading": ("Tajawal", 28, "bold"),
+            "title": ("Tajawal", 18, "bold"),
+            "normal": ("Tajawal", 14),
+            "bold": ("Tajawal", 14, "bold"),
+            "small": ("Tajawal", 12)
+        }
+
+        self.root.title(" نظام إدارة الدورات التخصصية - تسجيل الدخول")
+        self.root.geometry("900x600")
+        self.root.resizable(False, False)
+
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = (screen_width - 900) // 2
+        y = (screen_height - 600) // 2
+        self.root.geometry(f"900x600+{x}+{y}")
+
+        main_frame = tk.Frame(self.root, bg=self.colors["background"])
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        left_frame = tk.Frame(main_frame, bg=self.colors["primary"], width=350)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+        right_frame = tk.Frame(main_frame, bg=self.colors["background"])
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        left_title = tk.Label(
+            left_frame,
+            text="قــســم\nشــؤون\nالمـدربـين",
+            font=self.fonts["heading"],
+            bg=self.colors["primary"],
+            fg="white",
+            justify=tk.LEFT
+        )
+        left_title.place(x=30, y=150)
+
+        left_footer = tk.Label(
+            left_frame,
+            text="© 2025\nجميع الحقوق محفوظة \n للمهندس / عبدالرحمن جفال الشمري ",
+            font=self.fonts["small"],
+            bg=self.colors["primary"],
+            fg="white"
+        )
+        left_footer.place(x=30, y=520)
+
+        card = tk.Frame(right_frame, bg=self.colors["card"], bd=1, relief=tk.RIDGE, padx=40, pady=30)
+        card.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=420, height=380)
+
+        login_label = tk.Label(card, text="تسجيل الدخول", font=self.fonts["title"], fg=self.colors["primary"],
+                               bg=self.colors["card"])
+        login_label.pack(pady=(0, 20))
+
+        username_label = tk.Label(card, text="اسم المستخدم:", font=self.fonts["bold"], bg=self.colors["card"],
+                                  fg=self.colors["text"])
+        username_label.pack(anchor="w", pady=(5, 0))
+
+        self.username_entry = tk.Entry(card, font=self.fonts["normal"], bg=self.colors["card"], fg=self.colors["text"],
+                                       highlightthickness=1, highlightbackground=self.colors["border"], relief=tk.FLAT)
+        self.username_entry.pack(fill=tk.X, pady=(0, 10), ipady=6)
+        self.username_entry.focus_set()
+
+        password_label = tk.Label(card, text="كلمة المرور:", font=self.fonts["bold"], bg=self.colors["card"],
+                                  fg=self.colors["text"])
+        password_label.pack(anchor="w", pady=(5, 0))
+
+        self.password_entry = tk.Entry(card, font=self.fonts["normal"], bg=self.colors["card"], fg=self.colors["text"],
+                                       highlightthickness=1, highlightbackground=self.colors["border"], show="•",
+                                       relief=tk.FLAT)
+        self.password_entry.pack(fill=tk.X, pady=(0, 20), ipady=6)
+        self.password_entry.bind("<Return>", lambda event: self.login())
+
+        login_button = tk.Button(card, text="دخول", font=self.fonts["bold"], bg=self.colors["secondary"], fg="white",
+                                 bd=0, relief=tk.FLAT, cursor="hand2", command=self.login)
+        login_button.pack(fill=tk.X, pady=(0, 10), ipady=8)
+
+        self.status_label = tk.Label(card, text="", font=self.fonts["small"], bg=self.colors["card"],
+                                     fg=self.colors["error"])
+        self.status_label.pack()
+
+    def login(self):
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+
+        if not username or not password:
+            messagebox.showwarning("تنبيه", "الرجاء إدخال اسم المستخدم وكلمة المرور")
+            return
+
+        hashed_pwd = hashlib.sha256(password.encode()).hexdigest()
+        cursor = self.db_conn.cursor()
+        cursor.execute("""
+            SELECT u.id, u.username, u.full_name
+            FROM users u
+            WHERE u.username=? AND u.password=? AND u.is_active=1
+        """, (username, hashed_pwd))
+        user = cursor.fetchone()
+
+        if user:
+            cursor.execute("""
+                SELECT * FROM user_permissions WHERE user_id=?
+            """, (user[0],))
+            permissions = cursor.fetchone()
+
+            if not permissions:
+                is_admin = 1 if username == 'admin' else 0
+                with self.db_conn:
+                    cursor.execute("""
+                        INSERT INTO user_permissions (
+                            user_id, can_edit_attendance, can_add_students, 
+                            can_edit_students, can_delete_students, can_view_edit_history,
+                            can_reset_attendance, can_export_data, can_import_data, is_admin
+                        ) VALUES (?, 1, 1, 1, ?, ?, ?, 1, ?, ?)
+                    """, (user[0], is_admin, is_admin, is_admin, is_admin, is_admin))
+
+                cursor.execute("SELECT * FROM user_permissions WHERE user_id=?", (user[0],))
+                permissions = cursor.fetchone()
+
+            with self.db_conn:
+                self.db_conn.execute("UPDATE users SET last_login=? WHERE id=?",
+                                     (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user[0]))
+
+            self.current_user = {
+                "id": user[0],
+                "username": user[1],
+                "full_name": user[2],
+                "permissions": {
+                    "can_edit_attendance": bool(permissions[1]),
+                    "can_add_students": bool(permissions[2]),
+                    "can_edit_students": bool(permissions[3]),
+                    "can_delete_students": bool(permissions[4]),
+                    "can_view_edit_history": bool(permissions[5]),
+                    "can_reset_attendance": bool(permissions[6]),
+                    "can_export_data": bool(permissions[7]),
+                    "can_import_data": bool(permissions[8]),
+                    "is_admin": bool(permissions[9])
+                }
+            }
+
+            self.root.destroy()
+
+            new_root = tk.Tk()
+            ModernAttendanceSystem(new_root, self.current_user, self.db_conn)
+            new_root.mainloop()
+        else:
+            messagebox.showwarning("خطأ", "اسم المستخدم أو كلمة المرور غير صحيحة")
+
+
+class UserManagement:
+    def __init__(self, root, conn, current_user, colors, fonts):
+        self.root = root
+        self.conn = conn
+        self.current_user = current_user
+        self.colors = colors
+        self.fonts = fonts
+        self.create_user_management_window()
+
+    def create_user_management_window(self):
+        self.user_window = tk.Toplevel(self.root)
+        self.user_window.title("إدارة المستخدمين")
+        self.user_window.geometry("900x700")
+        self.user_window.configure(bg=self.colors["light"])
+        # self.user_window.transient(self.root)  # قم بتعليق هذا السطر أو حذفه
+        self.user_window.grab_set()
+
+        # تفعيل خاصية تغيير حجم النافذة
+        self.user_window.resizable(True, True)
+
+        x = (self.user_window.winfo_screenwidth() - 900) // 2
+        y = (self.user_window.winfo_screenheight() - 700) // 2
+        self.user_window.geometry(f"900x700+{x}+{y}")
+
+        tk.Label(
+            self.user_window,
+            text="إدارة المستخدمين",
+            font=self.fonts["large_title"],
+            bg=self.colors["primary"],
+            fg="white",
+            padx=10, pady=10, width=900
+        ).pack(fill=tk.X)
+
+        button_frame = tk.Frame(self.user_window, bg=self.colors["light"], pady=10)
+        button_frame.pack(fill=tk.X, padx=10)
+
+        add_user_btn = tk.Button(
+            button_frame, text="إضافة مستخدم جديد", font=self.fonts["text_bold"], bg=self.colors["success"], fg="white",
+            padx=10, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.add_user
+        )
+        add_user_btn.pack(side=tk.RIGHT, padx=5)
+
+        edit_user_btn = tk.Button(
+            button_frame, text="تعديل المستخدم المحدد", font=self.fonts["text_bold"], bg=self.colors["warning"],
+            fg="white",
+            padx=10, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.edit_user
+        )
+        edit_user_btn.pack(side=tk.RIGHT, padx=5)
+
+        toggle_active_btn = tk.Button(
+            button_frame, text="تفعيل/تعطيل المستخدم", font=self.fonts["text_bold"], bg=self.colors["secondary"],
+            fg="white",
+            padx=10, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.toggle_user_active
+        )
+        toggle_active_btn.pack(side=tk.RIGHT, padx=5)
+
+        delete_user_btn = tk.Button(
+            button_frame, text="حذف المستخدم المحدد", font=self.fonts["text_bold"], bg=self.colors["danger"],
+            fg="white",
+            padx=10, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.delete_user
+        )
+        delete_user_btn.pack(side=tk.RIGHT, padx=5)
+
+        manage_permissions_btn = tk.Button(
+            button_frame, text="إدارة صلاحيات المستخدم", font=self.fonts["text_bold"], bg="#9333EA", fg="white",
+            padx=10, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.manage_user_permissions
+        )
+        manage_permissions_btn.pack(side=tk.RIGHT, padx=5)
+
+        table_frame = tk.Frame(self.user_window, bg=self.colors["light"], padx=10, pady=10)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+
+        tree_scroll = tk.Scrollbar(table_frame)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.users_tree = ttk.Treeview(
+            table_frame,
+            columns=("id", "username", "full_name", "created_date", "last_login", "status", "is_admin"),
+            show="headings",
+            yscrollcommand=tree_scroll.set
+        )
+        self.users_tree.column("id", width=50, anchor=tk.CENTER)
+        self.users_tree.column("username", width=120, anchor=tk.CENTER)
+        self.users_tree.column("full_name", width=150, anchor=tk.CENTER)
+        self.users_tree.column("created_date", width=120, anchor=tk.CENTER)
+        self.users_tree.column("last_login", width=120, anchor=tk.CENTER)
+        self.users_tree.column("status", width=80, anchor=tk.CENTER)
+        self.users_tree.column("is_admin", width=80, anchor=tk.CENTER)
+
+        self.users_tree.heading("id", text="الرقم")
+        self.users_tree.heading("username", text="اسم المستخدم")
+        self.users_tree.heading("full_name", text="الاسم الكامل")
+        self.users_tree.heading("created_date", text="تاريخ الإنشاء")
+        self.users_tree.heading("last_login", text="آخر تسجيل دخول")
+        self.users_tree.heading("status", text="الحالة")
+        self.users_tree.heading("is_admin", text="مشرف")
+
+        self.users_tree.pack(fill=tk.BOTH, expand=True)
+        tree_scroll.config(command=self.users_tree.yview)
+
+        self.users_tree.tag_configure("active", background="#e8f5e9")
+        self.users_tree.tag_configure("inactive", background="#ffebee")
+        self.users_tree.tag_configure("admin", background="#e1f5fe")
+
+        self.load_users()
+
+        close_btn = tk.Button(
+            self.user_window, text="إغلاق", font=self.fonts["text_bold"], bg=self.colors["dark"], fg="white",
+            padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.user_window.destroy
+        )
+        close_btn.pack(pady=10)
+
+    def load_users(self):
+        for item in self.users_tree.get_children():
+            self.users_tree.delete(item)
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT u.id, u.username, u.full_name, u.created_date, u.last_login, u.is_active,
+                   COALESCE(p.is_admin, 0) as is_admin
+            FROM users u
+            LEFT JOIN user_permissions p ON u.id = p.user_id
+        """)
+        users = cursor.fetchall()
+        for user in users:
+            user_id, username, full_name, created_date, last_login, is_active, is_admin = user
+            status = "نشط" if is_active else "معطل"
+            admin_status = "نعم" if is_admin else "لا"
+            if not last_login:
+                last_login = "لم يسجل الدخول بعد"
+            item_id = self.users_tree.insert("", tk.END, values=(
+                user_id, username, full_name, created_date, last_login, status, admin_status))
+
+            if not is_active:
+                self.users_tree.item(item_id, tags=("inactive",))
+            elif is_admin:
+                self.users_tree.item(item_id, tags=("admin",))
+            else:
+                self.users_tree.item(item_id, tags=("active",))
+
+    def add_user(self):
+        add_window = tk.Toplevel(self.user_window)
+        add_window.title("إضافة مستخدم جديد")
+        add_window.geometry("400x430")
+        add_window.configure(bg=self.colors["light"])
+        add_window.transient(self.user_window)
+        add_window.grab_set()
+
+        x = (add_window.winfo_screenwidth() - 400) // 2
+        y = (add_window.winfo_screenheight() - 430) // 2
+        add_window.geometry(f"400x430+{x}+{y}")
+
+        tk.Label(
+            add_window,
+            text="إضافة مستخدم جديد",
+            font=self.fonts["title"],
+            bg=self.colors["primary"],
+            fg="white",
+            padx=10, pady=10, width=400
+        ).pack(fill=tk.X)
+
+        form_frame = tk.Frame(add_window, bg=self.colors["light"], padx=20, pady=20)
+        form_frame.pack(fill=tk.BOTH)
+
+        tk.Label(form_frame, text="اسم المستخدم:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=0, column=1, padx=5, pady=8, sticky=tk.E)
+        username_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25)
+        username_entry.grid(row=0, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="الاسم الكامل:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=1, column=1, padx=5, pady=8, sticky=tk.E)
+        fullname_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25)
+        fullname_entry.grid(row=1, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="كلمة المرور:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=2, column=1, padx=5, pady=8, sticky=tk.E)
+        password_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25, show="*")
+        password_entry.grid(row=2, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="تأكيد كلمة المرور:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=3, column=1, padx=5, pady=8, sticky=tk.E)
+        confirm_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25, show="*")
+        confirm_entry.grid(row=3, column=0, padx=5, pady=8, sticky=tk.W)
+
+        is_admin_var = tk.IntVar(value=0)
+        admin_check = tk.Checkbutton(
+            form_frame,
+            text="جعل هذا المستخدم مشرفًا",
+            variable=is_admin_var,
+            font=self.fonts["text"],
+            bg=self.colors["light"]
+        )
+        admin_check.grid(row=4, column=0, columnspan=2, padx=5, pady=8, sticky=tk.W)
+
+        button_frame = tk.Frame(add_window, bg=self.colors["light"], pady=10)
+        button_frame.pack(fill=tk.X)
+
+        def save_user():
+            username = username_entry.get().strip()
+            fullname = fullname_entry.get().strip()
+            password = password_entry.get().strip()
+            confirm = confirm_entry.get().strip()
+            is_admin = is_admin_var.get()
+
+            if not all([username, fullname, password, confirm]):
+                messagebox.showwarning("تنبيه", "يجب ملء جميع الحقول")
+                return
+            if password != confirm:
+                messagebox.showwarning("تنبيه", "كلمات المرور غير متطابقة")
+                return
+            if not re.match(r'^[a-zA-Z0-9_-]+$', username):
+                messagebox.showwarning("تنبيه", "اسم المستخدم يجب أن يتكون من حروف إنجليزية وأرقام وشرطات فقط")
+                return
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM users WHERE username=?", (username,))
+            count = cursor.fetchone()[0]
+            if count > 0:
+                messagebox.showwarning("تنبيه", "اسم المستخدم موجود بالفعل")
+                return
+
+            hashed_pwd = hashlib.sha256(password.encode()).hexdigest()
+            try:
+                with self.conn:
+                    self.conn.execute("""
+                        INSERT INTO users (username, password, full_name, created_date, is_active)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        username,
+                        hashed_pwd,
+                        fullname,
+                        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        1
+                    ))
+
+                    cursor.execute("SELECT id FROM users WHERE username=?", (username,))
+                    user_id = cursor.fetchone()[0]
+
+                    if is_admin:
+                        self.conn.execute("""
+                            INSERT INTO user_permissions (
+                                user_id, can_edit_attendance, can_add_students, 
+                                can_edit_students, can_delete_students, can_view_edit_history,
+                                can_reset_attendance, can_export_data, can_import_data, is_admin
+                            ) VALUES (?, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+                        """, (user_id,))
+                    else:
+                        self.conn.execute("""
+                            INSERT INTO user_permissions (
+                                user_id, can_edit_attendance, can_add_students, 
+                                can_edit_students, can_delete_students, can_view_edit_history,
+                                can_reset_attendance, can_export_data, can_import_data, is_admin
+                            ) VALUES (?, 1, 1, 1, 0, 0, 0, 1, 0, 0)
+                        """, (user_id,))
+
+                messagebox.showinfo("نجاح", "تم إضافة المستخدم بنجاح")
+                add_window.destroy()
+                self.load_users()
+            except Exception as e:
+                messagebox.showerror("خطأ", f"حدث خطأ أثناء إضافة المستخدم: {str(e)}")
+
+        save_btn = tk.Button(button_frame, text="حفظ", font=self.fonts["text_bold"], bg=self.colors["success"],
+                             fg="white",
+                             padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=save_user)
+        save_btn.pack(side=tk.LEFT, padx=10)
+        cancel_btn = tk.Button(button_frame, text="إلغاء", font=self.fonts["text_bold"], bg=self.colors["danger"],
+                               fg="white",
+                               padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=add_window.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=10)
+
+    def edit_user(self):
+        selected_item = self.users_tree.selection()
+        if not selected_item:
+            messagebox.showinfo("تنبيه", "الرجاء تحديد مستخدم من القائمة")
+            return
+        values = self.users_tree.item(selected_item, "values")
+        user_id = values[0]
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE id=?", (user_id,))
+        user = cursor.fetchone()
+        if not user:
+            messagebox.showerror("خطأ", "لم يتم العثور على المستخدم")
+            return
+
+        cursor.execute("SELECT * FROM user_permissions WHERE user_id=?", (user_id,))
+        permissions = cursor.fetchone()
+        is_admin = 0
+        if permissions:
+            is_admin = permissions[9]
+
+        edit_window = tk.Toplevel(self.user_window)
+        edit_window.title("تعديل المستخدم")
+        edit_window.geometry("400x430")
+        edit_window.configure(bg=self.colors["light"])
+        edit_window.transient(self.user_window)
+        edit_window.grab_set()
+
+        x = (edit_window.winfo_screenwidth() - 400) // 2
+        y = (edit_window.winfo_screenheight() - 430) // 2
+        edit_window.geometry(f"400x430+{x}+{y}")
+
+        tk.Label(
+            edit_window,
+            text=f"تعديل المستخدم: {user[1]}",
+            font=self.fonts["title"],
+            bg=self.colors["primary"],
+            fg="white",
+            padx=10, pady=10, width=400
+        ).pack(fill=tk.X)
+
+        form_frame = tk.Frame(edit_window, bg=self.colors["light"], padx=20, pady=20)
+        form_frame.pack(fill=tk.BOTH)
+
+        tk.Label(form_frame, text="اسم المستخدم:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=0, column=1, padx=5, pady=8, sticky=tk.E)
+        username_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25)
+        username_entry.insert(0, user[1])
+        username_entry.grid(row=0, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="الاسم الكامل:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=1, column=1, padx=5, pady=8, sticky=tk.E)
+        fullname_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25)
+        fullname_entry.insert(0, user[3])
+        fullname_entry.grid(row=1, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="كلمة المرور الجديدة:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=2, column=1, padx=5, pady=8, sticky=tk.E)
+        password_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25, show="*")
+        password_entry.grid(row=2, column=0, padx=5, pady=8, sticky=tk.W)
+
+        tk.Label(form_frame, text="تأكيد كلمة المرور:", font=self.fonts["text_bold"], bg=self.colors["light"],
+                 anchor=tk.E).grid(row=3, column=1, padx=5, pady=8, sticky=tk.E)
+        confirm_entry = tk.Entry(form_frame, font=self.fonts["text"], width=25, show="*")
+        confirm_entry.grid(row=3, column=0, padx=5, pady=8, sticky=tk.W)
+
+        is_admin_var = tk.IntVar(value=is_admin)
+        admin_check = tk.Checkbutton(
+            form_frame,
+            text="هذا المستخدم مشرف",
+            variable=is_admin_var,
+            font=self.fonts["text"],
+            bg=self.colors["light"]
+        )
+        admin_check.grid(row=4, column=0, columnspan=2, padx=5, pady=8, sticky=tk.W)
+
+        button_frame = tk.Frame(edit_window, bg=self.colors["light"], pady=10)
+        button_frame.pack(fill=tk.X)
+
+        def save_changes():
+            username = username_entry.get().strip()
+            fullname = fullname_entry.get().strip()
+            password = password_entry.get().strip()
+            confirm = confirm_entry.get().strip()
+            is_admin = is_admin_var.get()
+
+            if not all([username, fullname]):
+                messagebox.showwarning("تنبيه", "يجب ملء الحقول الأساسية")
+                return
+
+            if password:
+                if password != confirm:
+                    messagebox.showwarning("تنبيه", "كلمات المرور غير متطابقة")
+                    return
+            try:
+                with self.conn:
+                    if password:
+                        hashed_pwd = hashlib.sha256(password.encode()).hexdigest()
+                        self.conn.execute("UPDATE users SET username=?, full_name=?, password=? WHERE id=?",
+                                          (username, fullname, hashed_pwd, user[0]))
+                    else:
+                        self.conn.execute("UPDATE users SET username=?, full_name=? WHERE id=?",
+                                          (username, fullname, user[0]))
+
+                    cursor = self.conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM user_permissions WHERE user_id=?", (user[0],))
+                    has_permissions = cursor.fetchone()[0] > 0
+
+                    if has_permissions:
+                        self.conn.execute("UPDATE user_permissions SET is_admin=? WHERE user_id=?",
+                                          (is_admin, user[0]))
+                    else:
+                        if is_admin:
+                            self.conn.execute("""
+                                INSERT INTO user_permissions (
+                                    user_id, can_edit_attendance, can_add_students, 
+                                    can_edit_students, can_delete_students, can_view_edit_history,
+                                    can_reset_attendance, can_export_data, can_import_data, is_admin
+                                ) VALUES (?, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+                            """, (user[0],))
+                        else:
+                            self.conn.execute("""
+                                INSERT INTO user_permissions (
+                                    user_id, can_edit_attendance, can_add_students, 
+                                    can_edit_students, can_delete_students, can_view_edit_history,
+                                    can_reset_attendance, can_export_data, can_import_data, is_admin
+                                ) VALUES (?, 1, 1, 1, 0, 0, 0, 1, 0, 0)
+                            """, (user[0],))
+
+                messagebox.showinfo("نجاح", "تم تحديث بيانات المستخدم بنجاح")
+                edit_window.destroy()
+                self.load_users()
+            except Exception as e:
+                messagebox.showerror("خطأ", f"حدث خطأ أثناء تحديث المستخدم: {str(e)}")
+
+        save_btn = tk.Button(button_frame, text="حفظ التغييرات", font=self.fonts["text_bold"],
+                             bg=self.colors["warning"], fg="white",
+                             padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=save_changes)
+        save_btn.pack(side=tk.LEFT, padx=10)
+        cancel_btn = tk.Button(button_frame, text="إلغاء", font=self.fonts["text_bold"], bg=self.colors["danger"],
+                               fg="white",
+                               padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=edit_window.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=10)
+
+    def toggle_user_active(self):
+        selected_item = self.users_tree.selection()
+        if not selected_item:
+            messagebox.showinfo("تنبيه", "الرجاء تحديد مستخدم من القائمة")
+            return
+        values = self.users_tree.item(selected_item, "values")
+        user_id = values[0]
+        username = values[1]
+        status_text = values[5]
+        if username == self.current_user["username"]:
+            messagebox.showwarning("تنبيه", "لا يمكن تعطيل المستخدم الحالي")
+            return
+        new_status = 0 if status_text == "نشط" else 1
+        status_msg = "تفعيل" if new_status == 1 else "تعطيل"
+        if not messagebox.askyesnocancel("تأكيد", f"هل تريد {status_msg} المستخدم {username}؟"):
+            return
+        try:
+            with self.conn:
+                self.conn.execute("UPDATE users SET is_active=? WHERE id=?", (new_status, user_id))
+            messagebox.showinfo("نجاح", f"تم {status_msg} المستخدم بنجاح")
+            self.load_users()
+        except Exception as e:
+            messagebox.showerror("خطأ", f"حدث خطأ: {str(e)}")
+
+    def delete_user(self):
+        selected_item = self.users_tree.selection()
+        if not selected_item:
+            messagebox.showinfo("تنبيه", "الرجاء تحديد مستخدم من القائمة")
+            return
+        values = self.users_tree.item(selected_item, "values")
+        user_id = values[0]
+        username = values[1]
+        if username == self.current_user["username"]:
+            messagebox.showwarning("تنبيه", "لا يمكن حذف المستخدم الحالي")
+            return
+        if not messagebox.askyesnocancel("تأكيد", f"هل تريد حذف المستخدم {username}؟\nلا يمكن التراجع عن العملية!"):
+            return
+        try:
+            with self.conn:
+                self.conn.execute("DELETE FROM user_permissions WHERE user_id=?", (user_id,))
+                self.conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+            messagebox.showinfo("نجاح", "تم حذف المستخدم بنجاح")
+            self.load_users()
+        except Exception as e:
+            messagebox.showerror("خطأ", f"حدث خطأ أثناء حذف المستخدم: {str(e)}")
+
+    def manage_user_permissions(self):
+        selected_item = self.users_tree.selection()
+        if not selected_item:
+            messagebox.showinfo("تنبيه", "الرجاء تحديد مستخدم من القائمة")
+            return
+        values = self.users_tree.item(selected_item, "values")
+        user_id = values[0]
+        username = values[1]
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM user_permissions WHERE user_id=?", (user_id,))
+        permissions = cursor.fetchone()
+
+        if not permissions:
+            is_admin = 1 if values[6] == "نعم" else 0
+            with self.conn:
+                cursor.execute("""
+                    INSERT INTO user_permissions (
+                        user_id, can_edit_attendance, can_add_students, 
+                        can_edit_students, can_delete_students, can_view_edit_history,
+                        can_reset_attendance, can_export_data, can_import_data, is_admin
+                    ) VALUES (?, 1, 1, 1, ?, ?, ?, 1, ?, ?)
+                """, (user_id, is_admin, is_admin, is_admin, is_admin, is_admin))
+
+            cursor.execute("SELECT * FROM user_permissions WHERE user_id=?", (user_id,))
+            permissions = cursor.fetchone()
+
+        perm_window = tk.Toplevel(self.user_window)
+        perm_window.title(f"إدارة صلاحيات المستخدم: {username}")
+        perm_window.geometry("500x550")
+        perm_window.configure(bg=self.colors["light"])
+        perm_window.transient(self.user_window)
+        perm_window.grab_set()
+
+        x = (perm_window.winfo_screenwidth() - 500) // 2
+        y = (perm_window.winfo_screenheight() - 550) // 2
+        perm_window.geometry(f"500x550+{x}+{y}")
+
+        tk.Label(
+            perm_window,
+            text=f"صلاحيات المستخدم: {username}",
+            font=self.fonts["title"],
+            bg=self.colors["primary"],
+            fg="white",
+            padx=10, pady=10
+        ).pack(fill=tk.X)
+
+        perm_frame = tk.Frame(perm_window, bg=self.colors["light"], padx=20, pady=20)
+        perm_frame.pack(fill=tk.BOTH, expand=True)
+
+        is_admin_var = tk.IntVar(value=permissions[9])
+        can_edit_attendance_var = tk.IntVar(value=permissions[1])
+        can_add_students_var = tk.IntVar(value=permissions[2])
+        can_edit_students_var = tk.IntVar(value=permissions[3])
+        can_delete_students_var = tk.IntVar(value=permissions[4])
+        can_view_edit_history_var = tk.IntVar(value=permissions[5])
+        can_reset_attendance_var = tk.IntVar(value=permissions[6])
+        can_export_data_var = tk.IntVar(value=permissions[7])
+        can_import_data_var = tk.IntVar(value=permissions[8])
+
+        def update_permissions():
+            is_admin = is_admin_var.get()
+            if is_admin:
+                for var in [can_edit_attendance_var, can_add_students_var, can_edit_students_var,
+                            can_delete_students_var, can_view_edit_history_var, can_reset_attendance_var,
+                            can_export_data_var, can_import_data_var]:
+                    var.set(1)
+
+                for checkbox in permission_checkboxes:
+                    checkbox.config(state=tk.DISABLED)
+            else:
+                for checkbox in permission_checkboxes:
+                    checkbox.config(state=tk.NORMAL)
+
+        admin_title = tk.Label(perm_frame, text="صلاحيات عامة:", font=self.fonts["text_bold"], bg=self.colors["light"])
+        admin_title.grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+
+        admin_check = tk.Checkbutton(
+            perm_frame,
+            text="هذا المستخدم مشرف (يملك كل الصلاحيات)",
+            variable=is_admin_var,
+            font=self.fonts["text_bold"],
+            bg=self.colors["light"],
+            command=update_permissions
+        )
+        admin_check.grid(row=1, column=0, sticky=tk.W, pady=5)
+
+        specific_title = tk.Label(perm_frame, text="صلاحيات محددة:", font=self.fonts["text_bold"],
+                                  bg=self.colors["light"])
+        specific_title.grid(row=2, column=0, sticky=tk.W, pady=(20, 10))
+
+        permission_options = [
+            (can_edit_attendance_var, "تعديل سجلات الحضور والغياب"),
+            (can_add_students_var, "إضافة طلاب جدد"),
+            (can_edit_students_var, "تعديل بيانات الطلاب"),
+            (can_delete_students_var, "حذف الطلاب"),
+            (can_view_edit_history_var, "عرض سجل التعديلات (من عدّل ومتى)"),
+            (can_reset_attendance_var, "إعادة تعيين سجلات الحضور"),
+            (can_export_data_var, "تصدير البيانات"),
+            (can_import_data_var, "استيراد البيانات من Excel")
+        ]
+
+        permission_checkboxes = []
+        for i, (var, text) in enumerate(permission_options):
+            checkbox = tk.Checkbutton(
+                perm_frame,
+                text=text,
+                variable=var,
+                font=self.fonts["text"],
+                bg=self.colors["light"]
+            )
+            checkbox.grid(row=i + 3, column=0, sticky=tk.W, pady=5)
+            permission_checkboxes.append(checkbox)
+
+        update_permissions()
+
+        button_frame = tk.Frame(perm_window, bg=self.colors["light"], pady=10)
+        button_frame.pack(fill=tk.X, padx=20)
+
+        def save_permissions():
+            try:
+                with self.conn:
+                    self.conn.execute("""
+                        UPDATE user_permissions SET
+                            is_admin=?,
+                            can_edit_attendance=?,
+                            can_add_students=?,
+                            can_edit_students=?,
+                            can_delete_students=?,
+                            can_view_edit_history=?,
+                            can_reset_attendance=?,
+                            can_export_data=?,
+                            can_import_data=?
+                        WHERE user_id=?
+                    """, (
+                        is_admin_var.get(),
+                        can_edit_attendance_var.get(),
+                        can_add_students_var.get(),
+                        can_edit_students_var.get(),
+                        can_delete_students_var.get(),
+                        can_view_edit_history_var.get(),
+                        can_reset_attendance_var.get(),
+                        can_export_data_var.get(),
+                        can_import_data_var.get(),
+                        user_id
+                    ))
+                messagebox.showinfo("نجاح", "تم تحديث صلاحيات المستخدم بنجاح")
+                perm_window.destroy()
+                self.load_users()
+            except Exception as e:
+                messagebox.showerror("خطأ", f"حدث خطأ أثناء تحديث الصلاحيات: {str(e)}")
+
+        save_btn = tk.Button(button_frame, text="حفظ الصلاحيات", font=self.fonts["text_bold"],
+                             bg=self.colors["success"],
+                             fg="white", padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2",
+                             command=save_permissions)
+        save_btn.pack(side=tk.LEFT, padx=10)
+
+        cancel_btn = tk.Button(button_frame, text="إلغاء", font=self.fonts["text_bold"], bg=self.colors["danger"],
+                               fg="white", padx=15, pady=5, bd=0, relief=tk.FLAT, cursor="hand2",
+                               command=perm_window.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=10)
+
+    
     # تخزين الحجم الأصلي للخطوط قبل التعديل
     self.original_fonts = {
         "large_title": ("Tajawal", 24, "bold"),
